@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QuorumMarket — an outcome decided by three sources, a payout decided by code</title>
+<meta name="description" content="Open a binary market with three named sources. GenLayer validators read each one, two agreeing sources settle the market, and the contract pays the pool by arithmetic." />
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1c2430; --muted:#697586; --line:#e2e6ec;
+    --accent:#2f5fd0; --ok:#1f7a4d; --warn:#9a5b00; --bad:#a32b2b; --yes:#1f7a4d; --no:#a32b2b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:26px 20px 80px}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em;font-size:19px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:12.5px;color:var(--muted)}
+  .chip b{color:var(--ink);font-weight:600}
+  h2{font-size:15px;font-weight:650;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+  @media(max-width:920px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .stat span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .stat b{font-size:19px;font-weight:650}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  input,textarea,select{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+    font:inherit;color:var(--ink);background:#fff}
+  textarea{min-height:64px;resize:vertical}
+  input:focus,textarea:focus,select:focus{outline:2px solid #cdd9f5;border-color:#b9c9ee}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  @media(max-width:700px){.row,.row3{grid-template-columns:1fr}}
+  button{font:inherit;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
+    padding:9px 13px;cursor:pointer}
+  button:hover{border-color:#c9d2e2}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.yes{border-color:#bfe0cf;color:var(--yes);background:#f4fbf7;font-weight:600}
+  button.no{border-color:#eccfcf;color:var(--no);background:#fdf5f5;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.small{padding:6px 10px;font-size:13px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .market{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;margin-bottom:12px}
+  .market h3{margin:0 0 6px;font-size:15.5px;font-weight:650;line-height:1.35}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fbfcfd}
+  .pill.open{color:#2a4a8a;border-color:#ccd8f2;background:#f4f7fe}
+  .pill.resolved{color:var(--ok);border-color:#cfe8db;background:#f1faf5}
+  .pill.void{color:var(--warn);border-color:#f0dfc2;background:#fdf8ef}
+  .kv{font-size:13px;color:var(--muted);margin:3px 0}
+  .kv b{color:var(--ink);font-weight:600}
+  .sources{font-size:12.5px;color:var(--muted);margin:8px 0 2px;display:flex;flex-direction:column;gap:2px}
+  .sources span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .votes{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 2px}
+  .vote{font-size:12px;border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:#fafbfc;max-width:100%}
+  .vote b{display:block;font-weight:650;font-size:11.5px;letter-spacing:.02em}
+  .vote.yes b{color:var(--yes)} .vote.no b{color:var(--no)} .vote.unclear b{color:var(--warn)}
+  .vote q{color:var(--muted);font-style:italic}
+  .outcome{margin-top:10px;border-left:3px solid var(--line);padding:8px 12px;background:#fafbfc;
+    border-radius:0 8px 8px 0;font-size:13.5px}
+  .outcome b{display:block;margin-bottom:2px}
+  .bar{height:8px;border-radius:999px;background:#eef1f5;overflow:hidden;display:flex;margin:10px 0 4px}
+  .bar i{display:block;height:100%}
+  .bar .y{background:#7fc3a0} .bar .n{background:#e0a3a3}
+  #log{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#1c2430;color:#fff;
+    padding:10px 16px;border-radius:10px;font-size:13px;display:none;max-width:90vw;z-index:9}
+  .keys{display:flex;flex-direction:column;gap:6px}
+  .keyrow{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--muted);
+    border:1px solid var(--line);border-radius:8px;padding:6px 9px;background:#fafbfc}
+  .keyrow.on{border-color:#b9c9ee;background:#f5f8fe;color:var(--ink)}
+  .hint{font-size:12.5px;color:var(--muted);line-height:1.5}
+  .num{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dot"></span> QuorumMarket</div>
+    <div class="chips">
+      <span class="chip">Network <b>Studio</b></span>
+      <a class="chip" id="contractlink" href="#" target="_blank" rel="noreferrer">contract</a>
+      <span class="chip" id="walletchip">No key</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <main>
+      <div class="stats" id="stats"></div>
+
+      <section class="card">
+        <h2>Open a market</h2>
+        <p class="sub">A question and exactly three sources. Two of them have to agree before anyone is paid.</p>
+        <label for="q">Question</label>
+        <textarea id="q" placeholder="Will the attestation demo still serve its proof file on Friday?"></textarea>
+        <div class="row3">
+          <div><label for="s1">Source A</label><input id="s1" placeholder="https://…" /></div>
+          <div><label for="s2">Source B</label><input id="s2" placeholder="https://…" /></div>
+          <div><label for="s3">Source C</label><input id="s3" placeholder="https://…" /></div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="closes">Closes in</label>
+            <select id="closes">
+              <option value="2">2 minutes</option>
+              <option value="5" selected>5 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="60">1 hour</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="primary" id="open" style="width:100%">Open market</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Markets</h2>
+        <p class="sub" id="marketsub">Every market on this contract, newest first.</p>
+        <div id="markets"></div>
+      </section>
+    </main>
+
+    <aside>
+      <section class="card">
+        <h2>Acting as</h2>
+        <p class="sub">Keys live in this browser only. Credits are a ledger inside the contract.</p>
+        <select id="acting"></select>
+        <div class="actions">
+          <button class="small" id="genkey">New key</button>
+          <button class="small" id="importkey">Import key</button>
+        </div>
+        <div class="kv" style="margin-top:10px">address <b id="addr">no key yet</b></div>
+        <div class="kv">credits <b id="balance" class="num">—</b></div>
+      </section>
+
+      <section class="card">
+        <h2>How the outcome is decided</h2>
+        <p class="hint">
+          Validators read all three sources in one round and each reports a vote per source.
+          Two or more agreeing votes settle the market; anything else voids it and refunds every buyer.
+          The payout is arithmetic over the pool, so the last word is never the loudest person in the chat.
+        </p>
+        <div class="hint" style="margin-top:10px">
+          Buying costs credits, paying 1 credit per share. A winning share takes
+          <b>pool ÷ winning shares</b>, and the cents that cannot be divided go one each to the earliest buyers.
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+<div id="log"></div>
+<script src="./bundle.js"></script>
+</body>
+</html>

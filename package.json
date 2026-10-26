@@ -1,0 +1,18 @@
+{
+  "name": "quorum-market",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A binary prediction market settled by a quorum of three named sources. Built for GenLayer.",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "python -m pytest tests/direct -q",
+    "deploy": "node scripts/deploy_studionet.js",
+    "e2e": "node scripts/e2e_studionet.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "genlayer-js": "1.1.8"
+  }
+}
