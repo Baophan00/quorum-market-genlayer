@@ -252,6 +252,36 @@ function showBanner(message) {
   box.style.display = "flex";
 }
 
+const CACHE = "quorummarket.lastread";
+
+function saveCache(markets, stats) {
+  try {
+    localStorage.setItem(CACHE, JSON.stringify({ at: Date.now(), markets, stats }));
+  } catch {}
+}
+
+function loadCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CACHE) || "null");
+    return raw && Array.isArray(raw.markets) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function paintMarkets(markets, note) {
+  cache = markets || [];
+  const host = $("markets");
+  host.replaceChildren();
+  if (!cache.length) {
+    const empty = el("div", "card");
+    empty.append(el("div", "hint", "No market yet. Open one with three sources, then buy a side while it is open."));
+    host.append(empty);
+  }
+  for (const market of cache) host.append(renderMarket(market));
+  $("marketsub").textContent = note || `${cache.length} on this contract, newest first.`;
+}
+
 async function refresh() {
   try {
     const [markets, stats, balance] = await Promise.all([
@@ -259,22 +289,21 @@ async function refresh() {
       read("stats", []),
       read("balance_of", [me]),
     ]);
-    cache = markets || [];
     $("banner").style.display = "none";
+    saveCache(markets || [], stats || {});
     renderStats(stats || {}, balance);
-    const host = $("markets");
-    host.replaceChildren();
-    if (!cache.length) {
-      const empty = el("div", "card");
-      empty.append(el("div", "hint", "No market yet. Open one with three sources, then buy a side while it is open."));
-      host.append(empty);
-    }
-    for (const market of cache) host.append(renderMarket(market));
-    $("marketsub").textContent = `${cache.length} on this contract, newest first.`;
+    paintMarkets(markets);
   } catch (e) {
     const message = String((e && e.message) || e);
-    if (/rate limit/i.test(message)) {
-      showBanner("The public Studio RPC is rate limited right now, so the market list could not be read. Nothing is lost: it is read-only traffic.");
+    const cached = loadCache();
+    if (cached) {
+      renderStats(cached.stats || {}, null);
+      paintMarkets(cached.markets, `showing what the chain returned at ${new Date(cached.at).toLocaleTimeString()} — the live read is refused right now`);
+    }
+    if (/rate limit|failed to fetch|unknown rpc/i.test(message)) {
+      showBanner(
+        "The public Studio RPC is refusing reads right now (it allows 500 requests an hour), so this page is showing the last state it read. The markets and the payouts are on chain. Press Retry in a minute."
+      );
     } else {
       showBanner(`Could not read the contract: ${message.slice(0, 140)}`);
     }
@@ -315,5 +344,15 @@ setInterval(() => {
   }
 }, 1000);
 
-refresh();
-setInterval(refresh, 45000);
+setInterval(() => {
+  if (document.visibilityState === "visible") refresh();
+}, 45000);
+
+(async () => {
+  const cached = loadCache();
+  if (cached) {
+    renderStats(cached.stats || {}, null);
+    paintMarkets(cached.markets, `last read at ${new Date(cached.at).toLocaleTimeString()}`);
+  }
+  refresh();
+})();
