@@ -1,5 +1,6 @@
 import { createClient, createAccount, generatePrivateKey } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
+import { SNAPSHOT } from "./snapshot";
 
 const CONTRACT = "0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C";
 const EXPLORER = `https://explorer-studio.genlayer.com/address/${CONTRACT}`;
@@ -295,7 +296,7 @@ async function refresh() {
     paintMarkets(markets);
   } catch (e) {
     const message = String((e && e.message) || e);
-    const cached = loadCache();
+    const cached = loadCache() || SNAPSHOT;
     if (cached) {
       renderStats(cached.stats || {}, null);
       paintMarkets(cached.markets, `showing what the chain returned at ${new Date(cached.at).toLocaleTimeString()} — the live read is refused right now`);
