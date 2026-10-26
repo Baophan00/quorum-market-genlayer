@@ -239,6 +239,19 @@ function renderMarket(market) {
   return card;
 }
 
+function showBanner(message) {
+  const box = $("banner");
+  box.replaceChildren();
+  box.append(document.createTextNode(message));
+  const retry = el("button", "", "Retry");
+  retry.onclick = () => {
+    box.style.display = "none";
+    refresh();
+  };
+  box.append(retry);
+  box.style.display = "flex";
+}
+
 async function refresh() {
   try {
     const [markets, stats, balance] = await Promise.all([
@@ -247,6 +260,7 @@ async function refresh() {
       read("balance_of", [me]),
     ]);
     cache = markets || [];
+    $("banner").style.display = "none";
     renderStats(stats || {}, balance);
     const host = $("markets");
     host.replaceChildren();
@@ -258,7 +272,13 @@ async function refresh() {
     for (const market of cache) host.append(renderMarket(market));
     $("marketsub").textContent = `${cache.length} on this contract, newest first.`;
   } catch (e) {
-    log(`read failed: ${String((e && e.message) || e).slice(0, 160)}`);
+    const message = String((e && e.message) || e);
+    if (/rate limit/i.test(message)) {
+      showBanner("The public Studio RPC is rate limited right now, so the market list could not be read. Nothing is lost: it is read-only traffic.");
+    } else {
+      showBanner(`Could not read the contract: ${message.slice(0, 140)}`);
+    }
+    log("read failed, see the banner above");
   }
 }
 
@@ -296,4 +316,4 @@ setInterval(() => {
 }, 1000);
 
 refresh();
-setInterval(refresh, 20000);
+setInterval(refresh, 45000);
