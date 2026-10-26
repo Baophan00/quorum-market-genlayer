@@ -87,7 +87,7 @@ left for the app to show.
 ~/agent-escrow-genlayer/.venv/bin/python -m pytest tests/direct -q
 ```
 
-48 tests in `tests/direct/test_quorum_market.py`, all direct mode — no network, no chain, no keys. The suites are `TestOpen` (market creation and its refusals), `TestBuy` (ledger, sides, shortfall, close time), `TestQuorum` (every vote shape, and the strict parser that refuses a malformed answer), `TestPayout` (3:1 split, ties, exact sums, deterministic remainder, void refunds, double claim), `TestViews`, and `TestNoModelAfterResolution` (mocks cleared, then views and `claim` still work).
+49 tests in `tests/direct/test_quorum_market.py` (`49 passed`), all direct mode — no network, no chain, no keys. The suites are `TestOpen` (market creation and its refusals), `TestBuy` (ledger, sides, shortfall, close time), `TestQuorum` (every vote shape, and the strict parser that refuses a malformed answer), `TestPayout` (3:1 split, ties, exact sums, deterministic remainder, void refunds, double claim), `TestViews`, and `TestNoModelAfterResolution` (mocks cleared, then views and `claim` still work).
 
 Both nondeterministic pieces are mocked and the contract's own code path is exercised: `direct_vm.mock_web(...)` answers each of the three `gl.nondet.web.render` calls, so every source can be given its own page (and one test only lets the LLM mock fire when all three bodies arrive in the prompt, in source order), and `direct_vm.mock_llm(...)` answers the single `gl.eq_principle.prompt_comparative` round. Time is moved with `direct_vm.warp(...)` because `closes_at` is a unix timestamp.
 
