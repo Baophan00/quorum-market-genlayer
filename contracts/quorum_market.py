@@ -46,6 +46,7 @@ from genlayer import *
 OPEN = "open"
 RESOLVED = "resolved"
 VOID = "void"
+DISPUTED = "disputed"
 
 YES = "yes"
 NO = "no"
@@ -60,6 +61,8 @@ MAX_URL_CHARS = 300
 MAX_PAGE_CHARS = 3000     # per source: enough to read a page, not a whole site
 MAX_QUOTE_CHARS = 200
 MAX_AHEAD_SECONDS = 30 * 24 * 60 * 60
+MAX_DISPUTE_WINDOW = 7 * 24 * 60 * 60   # 7 days to file a dispute
+MAX_REASON_CHARS = 500
 
 PRINCIPLE = (
     "Both answers must report one vote for each of the three sources, in the same\n"
@@ -174,6 +177,11 @@ class Market:
     votes: str          # canonical JSON list of {source, vote, quote}, "" until resolved
     outcome: str        # "" | yes | no | void
     resolved_at: u256
+    disputed_by: str         # address that filed dispute, "" if none
+    dispute_reason: str      # reason text, "" if none
+    dispute_count: u256      # number of disputes filed (max 1)
+    original_outcome: str    # outcome before dispute, "" if no dispute
+    disputed_at: u256        # when dispute was filed
 
 
 @allow_storage
@@ -313,6 +321,9 @@ class QuorumMarket(gl.Contract):
             "state": m.state, "pool": str(m.pool), "yes_total": str(m.yes_total),
             "no_total": str(m.no_total), "buyers": len(json.loads(m.buyers)),
             "votes": votes, "outcome": m.outcome, "resolved_at": str(m.resolved_at),
+            "disputed_by": m.disputed_by, "dispute_reason": m.dispute_reason,
+            "dispute_count": str(m.dispute_count), "original_outcome": m.original_outcome,
+            "disputed_at": str(m.disputed_at),
         }
 
     # --------------------------------------------------------------------- writes
@@ -355,6 +366,7 @@ class QuorumMarket(gl.Contract):
             source_a=cleaned[0], source_b=cleaned[1], source_c=cleaned[2],
             closes_at=u256(closes_at), state=OPEN, pool=u256(0), yes_total=u256(0),
             no_total=u256(0), buyers=_canonical([]), votes="", outcome="", resolved_at=u256(0),
+            disputed_by="", dispute_reason="", dispute_count=u256(0), original_outcome="", disputed_at=u256(0),
         )
         self.markets[market_id] = market
         self.market_ids.append(market_id)
@@ -439,6 +451,72 @@ class QuorumMarket(gl.Contract):
         out["unclear_votes"] = sum(1 for v in votes if v["vote"] == UNCLEAR)
         return out
 
+
+    @gl.public.write
+    def dispute(self, market_id: str, reason: str) -> dict:
+        """File a dispute against a resolved/void market. Re-runs consensus
+        with the same three sources. If the new outcome differs, the market
+        outcome is updated. Only one dispute per market, only before any
+        claim has been made, only within 7 days of resolution.
+        """
+        m = self._load(market_id)
+        if m.state not in (RESOLVED, VOID):
+            raise gl.vm.UserError("only resolved or void markets can be disputed")
+        if int(m.dispute_count) >= 1:
+            raise gl.vm.UserError("this market has already been disputed once")
+        who = self._sender()
+        # Only buyers or the owner can file a dispute
+        buyers = json.loads(m.buyers)
+        if who not in buyers and who != m.owner:
+            raise gl.vm.UserError("only buyers or the market owner can file a dispute")
+        # Check no claims have been made yet
+        for b in buyers:
+            pos = self.positions.get(self._key(market_id, b))
+            if pos is not None and pos.claimed:
+                raise gl.vm.UserError("dispute must be filed before any claim")
+        # Check within dispute window
+        now = self._now()
+        if now > int(m.resolved_at) + MAX_DISPUTE_WINDOW:
+            raise gl.vm.UserError("dispute window has closed (7 days after resolution)")
+        if not isinstance(reason, str) or len(reason.strip()) == 0:
+            raise gl.vm.UserError("a dispute reason is required")
+        if len(reason) > MAX_REASON_CHARS:
+            raise gl.vm.UserError(f"dispute reason is longer than {MAX_REASON_CHARS} characters")
+
+        # Store original outcome
+        m.original_outcome = m.outcome
+        m.disputed_by = who
+        m.dispute_reason = reason.strip()[:MAX_REASON_CHARS]
+        m.dispute_count = u256(1)
+        m.disputed_at = u256(now)
+        m.state = DISPUTED
+        self.markets[market_id] = m
+
+        # Re-run consensus with same sources
+        sources = self._sources(m)
+        votes = self._read_quorum(m.question, sources)
+        new_outcome = _outcome_from(votes)
+
+        stored = [
+            {"source": sources[i], "vote": votes[i]["vote"], "quote": votes[i]["quote"]}
+            for i in range(SOURCE_COUNT)
+        ]
+        m.votes = _canonical(stored)
+        m.outcome = new_outcome
+        m.state = VOID if new_outcome == VOID else RESOLVED
+        m.resolved_at = u256(now)
+        self.markets[market_id] = m
+
+        out = self._shape(m)
+        out["dispute_filed_by"] = who
+        out["original_outcome"] = m.original_outcome
+        out["new_outcome"] = new_outcome
+        out["outcome_changed"] = (m.original_outcome != new_outcome)
+        out["yes_votes"] = sum(1 for v in votes if v["vote"] == YES)
+        out["no_votes"] = sum(1 for v in votes if v["vote"] == NO)
+        out["unclear_votes"] = sum(1 for v in votes if v["vote"] == UNCLEAR)
+        return out
+
     @gl.public.write
     def claim(self, market_id: str) -> dict:
         m = self._load(market_id)
@@ -516,7 +594,7 @@ class QuorumMarket(gl.Contract):
 
     @gl.public.view
     def is_resolved(self, market_id: str) -> bool:
-        return self._load(market_id).state != OPEN  # void counts as resolved
+        return self._load(market_id).state != OPEN  # void and disputed count as resolved
 
     @gl.public.view
     def stats(self) -> dict:

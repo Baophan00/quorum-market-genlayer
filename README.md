@@ -19,6 +19,7 @@ The credits are a ledger inside this contract and not money. Every address start
 | `balance_of(address)` | view | `100 - spent + won`, as an integer. |
 | `markets_of(owner)` | view | The ids of the markets an address opened. |
 | `is_resolved(market_id)` | view | `True` once the market is `resolved` or `void`. |
+| `dispute(market_id, reason)` | write | Challenge a resolved/void market within 7 days. Re-runs consensus. Only buyers or owner, only before any claim. |
 | `stats()` | view | `{markets, resolved, void, pool}`. |
 
 Integers are returned as strings in the dict views (`pool`, `yes_total`, `closes_at`, …) so that no JSON reader rounds them; `balance_of` returns a whole number.
@@ -37,11 +38,22 @@ Integers are returned as strings in the dict views (`pool`, `yes_total`, `closes
 
 The last row is the honest edge of the design: the quorum decides the outcome, not the book, so a market with no backers on the winning side has nothing to pay out.
 
+## Dispute resolution (new in V1 milestone)
+
+A market that has been resolved or voided can be challenged by any buyer or
+the market owner within 7 days of resolution. The dispute re-runs the full
+consensus round with the same three sources. If the second round produces a
+different outcome, the market outcome is updated and buyers can claim under
+the new result. Only one dispute per market. Disputes must be filed before
+any claim is made.
+
 ## Live
 
 - App: https://quorum-market.surge.sh
-- Contract (Studio Network): `0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C`
-- Explorer: https://explorer-studio.genlayer.com/address/0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C
+- Contract V0 (Studio Network): `0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C`
+- Contract V1 (Studio Network): `0x40258BEC230E312233a33F926a24bb3b729A1617`
+- Explorer V0: https://explorer-studio.genlayer.com/address/0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C
+- Explorer V1: https://explorer-studio.genlayer.com/address/0x40258BEC230E312233a33F926a24bb3b729A1617
 
 ## Three sources, a quorum, a payout on the live contract
 
