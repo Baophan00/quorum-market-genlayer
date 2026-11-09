@@ -26,7 +26,9 @@ if (!ADDRESS) {
   process.exit(1);
 }
 
-const KEYFILE = path.join(__dirname, ".e2e-keys.json");
+// Fresh keys per run: credits live in the contract, so a reused account carries
+// its old balance and can run out of bond. One run, one set.
+const KEYFILE = process.env.QM_KEYS || path.join("/tmp", `qm-e2e-keys-${Date.now().toString(36)}.json`);
 function keys() {
   if (fs.existsSync(KEYFILE)) return JSON.parse(fs.readFileSync(KEYFILE, "utf8"));
   const k = {
@@ -100,6 +102,7 @@ const read = (functionName, args) =>
 const SOURCE_A = "https://attest-demo-dusky.vercel.app/";
 const SOURCE_B = "https://attest-proof.vercel.app/";
 const SOURCE_C = "https://attest-stale.vercel.app/";
+const SOURCE_D = "https://attest-proof.vercel.app/?dispute=1";
 
 const QUESTION =
   process.argv[4] ||
@@ -135,6 +138,10 @@ const QUESTION =
   for (const [label, acct] of [["yes", yesAcct], ["no", noAcct]]) {
     console.log(`  ${label} ${acct.address} balance ${await read("balance_of", [acct.address])}`);
   }
+
+  const startYes = Number(await read("balance_of", [yesAcct.address]));
+  const startNo = Number(await read("balance_of", [noAcct.address]));
+  console.log(`  starting balances: yes ${startYes}, no ${startNo}`);
 
   console.log("\n[buyers] opposite sides of the same question");
   await write(yesClient, "yes", "buy", [marketId, "yes", 40]);
@@ -190,6 +197,35 @@ const QUESTION =
   console.log(`  the contract's rule says ${expected}, the market says ${market.outcome}`);
   if (expected !== market.outcome) throw new Error("the stored outcome does not follow the votes");
 
+  console.log("\n[dispute] the losing side buys a second reading with a fourth source");
+  const outcomeBeforeDispute = market.outcome;
+  const disputeStarted = Date.now();
+  const dispute = await send(noClient, "no", "dispute", [
+    marketId,
+    SOURCE_D,
+    "the first round read a stale page",
+  ]);
+  if (dispute.refused) throw new Error("the dispute was refused");
+  console.log(`  dispute round took ${Math.round((Date.now() - disputeStarted) / 1000)}s`);
+  market = await read("get_market", [marketId]);
+  console.log(`  disputed by ${market.disputed_by} | fourth source ${market.dispute_source}`);
+  console.log(`  round 1 ${market.original_outcome} | round 2 ${market.outcome}`);
+  market.votes.forEach((v, i) => {
+    const quote = v.quote ? `"${v.quote.slice(0, 80)}"` : "(no quote)";
+    console.log(`    ${i + 1}. ${v.vote.padEnd(8)} ${v.source}`);
+    console.log(`       ${quote}`);
+  });
+  const disputeVotes = market.votes.map((v) => v.vote);
+  const yesDispute = disputeVotes.filter((v) => v === "yes").length;
+  const noDispute = disputeVotes.filter((v) => v === "no").length;
+  const expectedDispute = yesDispute >= 3 ? "yes" : noDispute >= 3 ? "no" : "void";
+  console.log(`  counted: ${yesDispute} yes, ${noDispute} no, ${4 - yesDispute - noDispute} unclear`);
+  console.log(`  the contract's three-of-four rule says ${expectedDispute}`);
+  if (expectedDispute !== market.outcome) throw new Error("the dispute outcome does not follow its votes");
+  if (market.state !== (expectedDispute === "void" ? "void" : "resolved")) {
+    throw new Error("the dispute did not move the market into the right state");
+  }
+
   console.log("\n[claim] each buyer claims once");
   const claimed = {};
   for (const [label, client, acct, paid] of [
@@ -202,8 +238,14 @@ const QUESTION =
     if (reverted) {
       console.log(`  ${label} had nothing to claim (it did not hold the winning side)`);
       // Nobody else bid, so a losing buyer is refunded nothing beyond its stake.
-      if (market.outcome !== "void" && Number(balance) !== 100 - paid) {
-        throw new Error(`${label} lost but its balance is ${balance}, not ${100 - paid}`);
+      const bondLost =
+        market.disputed_by &&
+        market.outcome === outcomeBeforeDispute &&
+        market.outcome !== "void";
+      const base = label === "yes" ? startYes : startNo;
+      const expectedLost = base - paid - (label === "no" && bondLost ? 25 : 0);
+      if (Number(balance) !== expectedLost) {
+        throw new Error(`${label} lost but its balance is ${balance}, not ${expectedLost}`);
       }
       continue;
     }
@@ -211,8 +253,9 @@ const QUESTION =
     console.log(`  ${label} position: yes ${pos.yes} | no ${pos.no} | paid ${pos.paid} | claimed ${pos.claimed}`);
     console.log(`  ${label} balance after claiming: ${balance}`);
     // One holder per side, so the winning buyer takes the whole pool.
-    if (market.outcome === label && Number(balance) !== 100 - paid + Number(market.pool)) {
-      throw new Error(`${label} won but its balance is ${balance}, not ${100 - paid + Number(market.pool)}`);
+    const base = label === "yes" ? startYes : startNo;
+    if (market.outcome === label && Number(balance) !== base - paid + Number(market.pool)) {
+      throw new Error(`${label} won but its balance is ${balance}, not ${base - paid + Number(market.pool)}`);
     }
   }
 
@@ -228,7 +271,7 @@ const QUESTION =
   console.log("\nstats");
   console.log(JSON.stringify(await read("stats", []), null, 2));
   console.log(
-    "\nRESULT: three sources read by consensus, votes stored in source order, the outcome counted by the contract, the pool paid out by arithmetic"
+    "\nRESULT: three sources read by consensus, the losing side disputed with a fourth source and a bond, four votes counted three-of-four, and the pool paid out by arithmetic only after the dispute settled"
   );
 })().catch((e) => {
   console.error("\nFAILED:", e.message);

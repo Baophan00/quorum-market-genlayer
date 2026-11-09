@@ -915,3 +915,164 @@ class TestMarketList:
         assert [m["id"] for m in listing] == ["m-2", "m-1"]
         assert [m["id"] for m in contract.list_markets(2, 2)] == ["m-0"]
         assert contract.list_markets(9, 2) == []
+
+SRC_D = "https://dispute-demo.example.org/page"
+PAT_D = r"dispute-demo\.example\.org"
+PAT_DISPUTE = r"You are reading four named sources"
+
+REASON = "the first round read a stale page"
+
+
+def mock_dispute(direct_vm, votes, page=PAGE_YES):
+    """The fourth page plus the second consensus answer."""
+    direct_vm.mock_web(PAT_D, {"status": 200, "body": page})
+    direct_vm.mock_llm(PAT_DISPUTE, json.dumps({"votes": votes, "outcome": "yes"}))
+
+
+def market_with_two_buyers(contract, direct_vm, alice, bob, picks=("yes", "yes", "unclear"), outcome="yes"):
+    """Alice buys 10 yes, Bob buys 5 no, then the market resolves."""
+    open_market(contract, direct_vm, alice, ahead=60)
+    buy(contract, direct_vm, alice, "yes", 10)
+    buy(contract, direct_vm, bob, "no", 5)
+    direct_vm.warp(iso(now() + 120))
+    return resolve_now(contract, direct_vm, alice, picks=picks, outcome=outcome)
+
+
+class TestDispute:
+    def test_a_dispute_that_changes_the_reading_moves_the_outcome(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(contract, direct_vm, direct_alice, direct_bob)
+        mock_dispute(direct_vm, votes_of("no", "no", "unclear", "no"))
+
+        direct_vm.sender = direct_bob
+        out = contract.dispute("ship", SRC_D, REASON)
+
+        assert out["new_outcome"] == "no"
+        assert out["outcome"] == "no"
+        assert out["state"] == "resolved"
+        assert out["dispute_source"] == SRC_D
+        assert out["bond_returned"] is True
+        assert out["outcome_changed"] is True
+        assert out["dispute_bond"] == "25"
+        assert out["votes"][3] == {"source": SRC_D, "vote": "no", "quote": "quote 4"}
+        market = contract.get_market("ship")
+        assert market["dispute_count"] == "1"
+        assert market["original_outcome"] == "yes"
+        # Bob paid 5 for his shares; the bond came back.
+        assert contract.balance_of(direct_bob) == 95
+
+    def test_a_dispute_that_agrees_leaves_the_bond_in_the_pool(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(contract, direct_vm, direct_alice, direct_bob)
+        mock_dispute(direct_vm, votes_of("yes", "yes", "yes", "unclear"))
+
+        direct_vm.sender = direct_bob
+        out = contract.dispute("ship", SRC_D, REASON)
+
+        assert out["outcome"] == "yes"
+        assert out["bond_returned"] is False
+        assert contract.get_market("ship")["pool"] == "40"   # 15 staked + 25 bond
+        assert contract.balance_of(direct_bob) == 70          # paid 5, bond kept
+
+        direct_vm.sender = direct_alice
+        claimed = contract.claim("ship")
+        assert claimed["payout"] == "40"
+        assert contract.balance_of(direct_alice) == 130
+
+    def test_only_a_buyer_or_the_owner_can_dispute(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        open_market(contract, direct_vm, direct_alice, ahead=60)
+        buy(contract, direct_vm, direct_alice, "yes", 10)
+        direct_vm.warp(iso(now() + 120))
+        resolve_now(contract, direct_vm, direct_alice)
+        mock_dispute(direct_vm, votes_of("no", "no", "no", "no"))
+
+        direct_vm.sender = direct_bob
+        with direct_vm.expect_revert("only buyers or the market owner can file a dispute"):
+            contract.dispute("ship", SRC_D, REASON)
+
+    def test_the_first_claim_closes_the_dispute_window(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(contract, direct_vm, direct_alice, direct_bob)
+        direct_vm.sender = direct_alice
+        contract.claim("ship")
+        mock_dispute(direct_vm, votes_of("no", "no", "no", "no"))
+
+        direct_vm.sender = direct_bob
+        with direct_vm.expect_revert("dispute must be filed before any claim"):
+            contract.dispute("ship", SRC_D, REASON)
+
+    def test_a_market_is_disputed_only_once(self, direct_vm, direct_deploy, direct_alice, direct_bob):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(contract, direct_vm, direct_alice, direct_bob)
+        mock_dispute(direct_vm, votes_of("no", "no", "unclear", "no"))
+        direct_vm.sender = direct_bob
+        contract.dispute("ship", SRC_D, REASON)
+
+        with direct_vm.expect_revert("already been disputed once"):
+            contract.dispute("ship", SRC_D, REASON)
+
+    def test_the_dispute_source_must_be_a_fourth_source(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(contract, direct_vm, direct_alice, direct_bob)
+        mock_dispute(direct_vm, votes_of("no", "no", "no", "no"))
+        direct_vm.sender = direct_bob
+
+        with direct_vm.expect_revert("fourth, distinct source"):
+            contract.dispute("ship", SRC_A, REASON)
+        with direct_vm.expect_revert("not an http"):
+            contract.dispute("ship", "not-a-url", REASON)
+
+    def test_an_open_market_cannot_be_disputed(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        open_market(contract, direct_vm, direct_alice)
+        buy(contract, direct_vm, direct_bob, "yes", 5)
+        mock_dispute(direct_vm, votes_of("no", "no", "no", "no"))
+
+        with direct_vm.expect_revert("only resolved or void markets"):
+            contract.dispute("ship", SRC_D, REASON)
+
+    def test_the_bond_must_be_affordable(self, direct_vm, direct_deploy, direct_alice):
+        contract = deploy(direct_deploy)
+        open_market(contract, direct_vm, direct_alice, ahead=60)
+        buy(contract, direct_vm, direct_alice, "yes", 80)
+        direct_vm.warp(iso(now() + 120))
+        resolve_now(contract, direct_vm, direct_alice)
+        mock_dispute(direct_vm, votes_of("no", "no", "no", "no"))
+
+        with direct_vm.expect_revert("needs a bond of 25 credits, you have 20"):
+            contract.dispute("ship", SRC_D, REASON)
+
+    def test_a_dispute_without_a_majority_voids_the_market_and_returns_the_bond(
+        self, direct_vm, direct_deploy, direct_alice, direct_bob
+    ):
+        contract = deploy(direct_deploy)
+        market_with_two_buyers(
+            contract, direct_vm, direct_alice, direct_bob,
+            picks=("no", "no", "unclear"), outcome="no",
+        )
+        mock_dispute(direct_vm, votes_of("unclear", "unclear", "unclear", "unclear"))
+
+        direct_vm.sender = direct_bob
+        out = contract.dispute("ship", SRC_D, REASON)
+
+        assert out["new_outcome"] == "void"
+        assert out["state"] == "void"
+        assert out["bond_returned"] is True
+        assert contract.balance_of(direct_bob) == 95
+
+        direct_vm.sender = direct_alice
+        assert contract.claim("ship")["payout"] == "10"
+        assert contract.balance_of(direct_alice) == 100

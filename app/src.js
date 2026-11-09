@@ -2,7 +2,7 @@ import { createClient, createAccount, generatePrivateKey } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import { SNAPSHOT } from "./snapshot";
 
-const CONTRACT = "0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C";
+const CONTRACT = "0x68689539cB8a977901EF6395F7259704061Fc818";
 const EXPLORER = `https://explorer-studio.genlayer.com/address/${CONTRACT}`;
 const KEY_SLOT = "quorummarket.keys";
 
@@ -158,9 +158,10 @@ function renderVotes(market) {
   const votes = market.votes || [];
   if (!votes.length) return null;
   const box = el("div", "votes");
+  if (market.disputed_by) box.append(el("div", "kv", "second reading · four sources"));
   votes.forEach((v, i) => {
     const card = el("div", `vote ${v.vote}`);
-    card.append(el("b", "", `source ${"ABC"[i]} · ${v.vote}`));
+    card.append(el("b", "", `source ${"ABCD"[i]} · ${v.vote}`));
     if (v.quote) card.append(el("q", "", v.quote.slice(0, 120)));
     box.append(card);
   });
@@ -232,6 +233,26 @@ function renderMarket(market) {
   }
   if (market.state === "open" && Number(market.closes_at) * 1000 <= Date.now()) {
     actions.append(actionButton("Resolve from the three sources", "primary", () => send("resolve", [market.id])));
+  }
+  const canDispute =
+    (market.state === "resolved" || market.state === "void") &&
+    !market.disputed_by &&
+    Number(market.dispute_count || 0) === 0;
+  if (canDispute) {
+    const src = el("input");
+    src.type = "url";
+    src.placeholder = "fourth source URL";
+    src.style.width = "230px";
+    const why = el("input");
+    why.type = "text";
+    why.placeholder = "why the first read is wrong";
+    why.style.width = "230px";
+    actions.append(src, why);
+    actions.append(
+      actionButton(`Dispute · bond ${market.dispute_bond || 25}`, "", () =>
+        send("dispute", [market.id, src.value.trim(), why.value.trim()])
+      )
+    );
   }
   if (market.state === "resolved" || market.state === "void") {
     actions.append(actionButton("Claim", "primary", () => send("claim", [market.id])));

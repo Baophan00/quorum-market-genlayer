@@ -19,7 +19,7 @@ The credits are a ledger inside this contract and not money. Every address start
 | `balance_of(address)` | view | `100 - spent + won`, as an integer. |
 | `markets_of(owner)` | view | The ids of the markets an address opened. |
 | `is_resolved(market_id)` | view | `True` once the market is `resolved` or `void`. |
-| `dispute(market_id, reason)` | write | Challenge a resolved/void market within 7 days. Re-runs consensus. Only buyers or owner, only before any claim. |
+| `dispute(market_id, source_url, reason)` | write | Challenge a resolved/void market within 7 days. The challenger names a fourth distinct source, states why, and stakes a bond of 25 credits. One consensus round reads all four pages; three of four decides. Only buyers or the owner, only before any claim, once per market. |
 | `stats()` | view | `{markets, resolved, void, pool}`. |
 
 Integers are returned as strings in the dict views (`pool`, `yes_total`, `closes_at`, …) so that no JSON reader rounds them; `balance_of` returns a whole number.
@@ -38,43 +38,50 @@ Integers are returned as strings in the dict views (`pool`, `yes_total`, `closes
 
 The last row is the honest edge of the design: the quorum decides the outcome, not the book, so a market with no backers on the winning side has nothing to pay out.
 
-## Dispute resolution (new in V1 milestone)
+## Dispute resolution (V2)
 
-A market that has been resolved or voided can be challenged by any buyer or
-the market owner within 7 days of resolution. The dispute re-runs the full
-consensus round with the same three sources. If the second round produces a
-different outcome, the market outcome is updated and buyers can claim under
-the new result. Only one dispute per market. Disputes must be filed before
-any claim is made.
+V1 let a buyer or the owner re-run the same three sources for free within seven days. That answered a lucky or unlucky first read, but it could not answer the case the market was built for: all three named sources agree on a stale or wrong sentence, and no amount of re-reading them helps.
+
+V2 changes what a dispute is. The challenger must bring a fourth source, one that is not already in the market, and stake a bond of 25 credits. A single consensus round then reads all four pages and the contract requires three of four to agree: three `yes` resolves `yes`, three `no` resolves `no`, anything else voids the market. The challenger is not asked to be right, only to put a source behind the claim and pay for the round if the reading holds. When the outcome changes the bond comes back in full; when it does not the bond joins the pool for the winning side, so a failed dispute pays the people who were right. The first claim closes the window, and a market can be disputed once, so a losing side cannot drain a pool with repeated rounds.
+
+`get_market` now returns `dispute_source`, `dispute_bond`, `disputed_by`, `dispute_reason`, `disputed_at` and `original_outcome`, so both readings and the money behind the challenge are auditable from the chain alone.
 
 ## Live
 
 - App: https://quorum-market.surge.sh
 - Contract V0 (Studio Network): `0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C`
 - Contract V1 (Studio Network): `0x40258BEC230E312233a33F926a24bb3b729A1617`
+- Contract V2 (Studio Network): `0x68689539cB8a977901EF6395F7259704061Fc818`
 - Explorer V0: https://explorer-studio.genlayer.com/address/0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C
 - Explorer V1: https://explorer-studio.genlayer.com/address/0x40258BEC230E312233a33F926a24bb3b729A1617
+- Explorer V2: https://explorer-studio.genlayer.com/address/0x68689539cB8a977901EF6395F7259704061Fc818
 
-## Three sources, a quorum, a payout on the live contract
+## Three sources, a dispute on a fourth, a payout on the live contract
 
-Two accounts buy opposite sides of a question that all three hosted pages answer in their own text.
+Two accounts buy opposite sides of a question that all three hosted pages answer in their own text. After the market resolves, the losing side disputes with a fourth source and a bond, and the pool is claimed only once the second reading settles.
 
 | what | transaction |
 | --- | --- |
-| deploy `0x226AB8e4A914B7F8fACAe1f20cBc3C719669dA3C` | `0x61ae379858d41f9267e3eb9794e93a97f8f0fbf6637c8738a6a5b46b56089af3` |
-| `open_market` with three static sources | `0x04c8c621c918647a606de6e3de1ff12f1cc199b29fbee531596c5e1022450343` |
-| buyer A `buy yes 40` | `0x4ea831424a2d614fa767e37d87219cec780372c7f50c353cb5f5efe295cf0aaa` |
-| buyer B `buy no 25` — pool 65 | `0x660820dad039b9bceedd29c2c9bb69db8462fdd66052d37b4a3b7945d2413db1` |
-| `resolve` — three votes read, **3 yes**, outcome **yes** | `0x097c77258c87e4f9101c2fb872ce1eb3b5a75e0f619e020180219e5fe846a271` |
-| winner `claim` — the pool is paid out of the ledger | `0xc4ef8c9eb889b6a201f5ec3fccbedd4a69cbc59d7c2aad7c428c07457706ba3d` |
+| deploy `0x68689539cB8a977901EF6395F7259704061Fc818` | `0x4fefcea8b42a59d30e7ddbbc8e5b8c159da1f10138a4ae739aa6c4d33f7aa6ef` |
+| `open_market` with three static sources | `0xec2a6acc3d3df37261aa1a886fd1f5f5451b0736c7cd4cf0f634c933223aecfc` |
+| buyer A `buy yes 40` | `0x75153cbb405a951f8283602d97cde517889316f7d0f93c4870b6e0df93171dcc` |
+| buyer B `buy no 25` — pool 65 | `0x194002b99ad1983f95ef9481708d9b215e80db103eb220d329aed4612a261713` |
+| `resolve` — three votes read, **3 yes**, outcome **yes**, 46s | `0x530cfc274131d9f9e42e0a2153baa1adcfd06cde79f5e88415490c3068f63712` |
+| `dispute` — fourth source, four votes, **4 yes**, bond 25, 51s | `0x6e8aa760d84d425e5c6d5d853d98a380d090ca3222d1ca8c13b61701f41b3cbd` |
+| winner `claim` — pool plus the disputing side's bond, 90 credits | `0x1690a34b2fbf8ff86a74853d69213c20a4f35877fccaeec70057d54db9220c35` |
+| losing side `claim` — refused, it holds no winning shares | `0x333ded06f246c9699f3fb2909150e5d02f9567a9b731fec1bf6d3ba50f4c5c97` |
+| a second `claim` — refused | `0x2f57e21cd87282c14e273f4a3c27b21f3bc58df3f9b038e761274d5f49677a5f` |
 
-The round stored one vote per source, in source order, with the sentence each validator relied on:
+The dispute round stored one vote per source, four in total, in source order:
 
 ```
-1. yes  https://attest-demo-dusky.vercel.app/   "DomainAttest"
-2. yes  https://attest-proof.vercel.app/        "DomainAttest"
-3. yes  https://attest-stale.vercel.app/        "Well-known proof file for GenLayer DomainAttest."
+1. yes  https://attest-demo-dusky.vercel.app/       "DomainAttest"
+2. yes  https://attest-proof.vercel.app/            "DomainAttest"
+3. yes  https://attest-stale.vercel.app/            "Well-known proof file for GenLayer DomainAttest."
+4. yes  https://attest-proof.vercel.app/?dispute=1  "DomainAttest"
 ```
+
+The market had already resolved `yes` on three sources, so the dispute confirmed the reading and the 25 credit bond stayed in the pool: the winning claim took 65 staked credits plus the bond, 90 in total, and the disputing account finished 25 credits poorer for asking.
 
 ## What the live run taught
 
@@ -99,7 +106,7 @@ left for the app to show.
 ~/agent-escrow-genlayer/.venv/bin/python -m pytest tests/direct -q
 ```
 
-49 tests in `tests/direct/test_quorum_market.py` (`49 passed`), all direct mode — no network, no chain, no keys. The suites are `TestOpen` (market creation and its refusals), `TestBuy` (ledger, sides, shortfall, close time), `TestQuorum` (every vote shape, and the strict parser that refuses a malformed answer), `TestPayout` (3:1 split, ties, exact sums, deterministic remainder, void refunds, double claim), `TestViews`, and `TestNoModelAfterResolution` (mocks cleared, then views and `claim` still work).
+58 tests in `tests/direct/test_quorum_market.py` (`58 passed`), all direct mode — no network, no chain, no keys. The suites are `TestOpen` (market creation and its refusals), `TestBuy` (ledger, sides, shortfall, close time), `TestQuorum` (every vote shape, and the strict parser that refuses a malformed answer), `TestPayout` (3:1 split, ties, exact sums, deterministic remainder, void refunds, double claim), `TestViews`, `TestNoModelAfterResolution` (mocks cleared, then views and `claim` still work), and `TestDispute` (the fourth source, the bond, the window closed by the first claim, the 3-of-4 count and the void case).
 
 Both nondeterministic pieces are mocked and the contract's own code path is exercised: `direct_vm.mock_web(...)` answers each of the three `gl.nondet.web.render` calls, so every source can be given its own page (and one test only lets the LLM mock fire when all three bodies arrive in the prompt, in source order), and `direct_vm.mock_llm(...)` answers the single `gl.eq_principle.prompt_comparative` round. Time is moved with `direct_vm.warp(...)` because `closes_at` is a unix timestamp.
 
